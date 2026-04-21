@@ -1,0 +1,20 @@
+{
+  "error": {
+    "data": {
+      "reason": "405",
+      "location": "cln"
+    },
+    "isBoom": true,
+    "isServer": false,
+    "output": {
+      "statusCode": 405,
+      "payload": {
+        "statusCode": 405,
+        "error": "Method Not Allowed",
+        "message": "Connection Failure"
+      },
+      "headers": {}
+    }
+  },
+  "statusCode": 405
+}

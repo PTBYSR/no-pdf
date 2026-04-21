@@ -1,4 +1,9 @@
-const { default: makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+/**
+ * ⚠️ DEPRECATED — This is the old standalone version.
+ * Use `node server.js` instead for the full dynamic onboarding system.
+ * This file is kept for reference only.
+ */
+const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestWaWebVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
 const qrcode = require('qrcode-terminal');
 const { analyzeMessage } = require('./detection_agent');
@@ -17,9 +22,14 @@ async function startSocket(authFolder, isMonitor) {
         console.log(`Starting ${role} instance...`);
         console.log(`===================================================\n`);
 
+        const { version, isLatest } = await fetchLatestWaWebVersion();
+        console.log(`using WA v${version.join('.')}, isLatest: ${isLatest}`);
+
         const sock = makeWASocket({
+            version,
             logger: pino({ level: 'silent' }),
             printQRInTerminal: false,
+            browser: ['Ubuntu', 'Chrome', '110.0.0'],
             auth: state,
         });
 
@@ -36,8 +46,11 @@ async function startSocket(authFolder, isMonitor) {
             }
 
             if (connection === 'close') {
-                const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-                console.log(`${role} connection closed. Reconnecting: ${shouldReconnect}`);
+                const error = lastDisconnect?.error;
+                const statusCode = error?.output?.statusCode;
+                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                console.log(`${role} connection closed. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
 
                 if (shouldReconnect) {
                     // Reconnect logic
