@@ -27,7 +27,7 @@ async function startSocket(authFolder, isMonitor) {
 
         const sock = makeWASocket({
             version,
-            logger: pino({ level: 'silent' }),
+            logger: pino({ level: 'info' }),
             printQRInTerminal: false,
             browser: ['Ubuntu', 'Chrome', '110.0.0'],
             auth: state,
@@ -49,14 +49,18 @@ async function startSocket(authFolder, isMonitor) {
                 const error = lastDisconnect?.error;
                 const statusCode = error?.output?.statusCode;
                 const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
                 console.log(`${role} connection closed. Status Code: ${statusCode}. Reconnecting: ${shouldReconnect}`);
+                if (error) {
+                    console.error('Connection Error Detail:', error);
+                }
 
                 if (shouldReconnect) {
-                    // Reconnect logic
-                    startSocket(authFolder, isMonitor).then(newSock => {
-                        if (!isMonitor) notifierSock = newSock;
-                    });
+                    console.log(`Reconnecting in 5 seconds...`);
+                    setTimeout(() => {
+                        startSocket(authFolder, isMonitor).then(newSock => {
+                            if (!isMonitor) notifierSock = newSock;
+                        });
+                    }, 5000);
                 }
             } else if (connection === 'open') {
                 console.log(`\n>>> ${role} CONNECTED SUCCESSFULLY! <<<\n`);
