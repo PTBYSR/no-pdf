@@ -42,6 +42,12 @@ let notifierSock = null;
 // Active Child Sessions: Map<userId, socket>
 const activeChildSessions = new Map();
 
+// Track known parent JIDs so we can greet them on reconnect
+const knownParents = new Set();
+
+// Intro message template
+const INTRO_MESSAGE = `👋 *Hello! I'm your Child Safety Bot* 🛡️\n\nI help you monitor your child's WhatsApp for suspicious messages and keep them safe online.\n\n*To get started, send one of these trigger words:*\n• \"Start\"\n• \"start safety\"\n• \"add child\"\n\nOnce triggered, I'll send you a QR code to scan on your child's phone.\n\n📊 You can also ask about your child's activity anytime by saying:\n• \"activity\"\n• \"report\"\n• \"who messaged\"\n• \"last message\"\n\nI'm here to help! 💙`;
+
 // Helper: Start Notifier Bot (Singleton)
 async function startNotifierBot() {
     console.log('\n🤖 Starting Safety Bot...\n');
@@ -117,6 +123,13 @@ async function startNotifierBot() {
         } else if (connection === 'open') {
             console.log('\n✅ BOT ONLINE — Ready to receive onboarding messages!\n');
             notifierSock = sock;
+
+            // Send intro message to all known parents on reconnect
+            for (const parentJid of knownParents) {
+                sock.sendMessage(parentJid, { text: `✅ *Bot is back online!*\n\n${INTRO_MESSAGE}` }).catch(err => {
+                    console.error(`Failed to send reconnect intro to ${parentJid}:`, err.message);
+                });
+            }
         }
     });
 
@@ -129,6 +142,9 @@ async function startNotifierBot() {
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
 
             if (text) console.log(`📩 Bot received: "${text}"`);
+
+            // Track this parent
+            knownParents.add(senderJid);
 
             // Chat-Based Onboarding Trigger
             if (text.toLowerCase().includes('start safety') || text.toLowerCase().includes('add child') || text === 'Start') {
@@ -206,6 +222,9 @@ async function startNotifierBot() {
                     console.error('❌ Failed to fetch activity');
                     await sock.sendMessage(senderJid, { text: "⚠️ Error fetching activity logs." });
                 }
+            } else if (text) {
+                // Unrecognized message — send intro with trigger words
+                await sock.sendMessage(senderJid, { text: INTRO_MESSAGE });
             }
         }
     });
