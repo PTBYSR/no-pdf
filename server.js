@@ -6,18 +6,72 @@ const { Server } = require('socket.io');
 const { MongoClient } = require('mongodb');
 const { default: makeWASocket, useMultiFileAuthState, DisconnectReason, delay, fetchLatestWaWebVersion, Browsers } = require('@whiskeysockets/baileys');
 const pino = require('pino');
-const QRCode = require('qrcode'); // For generating Image Buffers
-const qrcodeTerminal = require('qrcode-terminal'); // For Terminal QR
+const QRCode = require('qrcode');
+const qrcodeTerminal = require('qrcode-terminal');
 const cors = require('cors');
 const bodyParser = require('body-parser');
-
 const { analyzeMessage, summarizeActivity } = require('./detection_agent');
-// We will use file-based auth for the singleton notifier for simplicity/stability first
-// and MongoDB for the dynamic child sessions
 
+// --------------------------------------------------------------------------------
+// Minimal Logger Setup
+// --------------------------------------------------------------------------------
+const reset = "\x1b[0m";
+const bold = "\x1b[1m";
+const green = "\x1b[32m";
+const yellow = "\x1b[33m";
+const blue = "\x1b[34m";
+const cyan = "\x1b[36m";
+const red = "\x1b[31m";
+
+let isOnboarding = false;
+
+const log = {
+    info: (msg) => { 
+        if (!isOnboarding || msg.includes('[Child]')) {
+            console.log(`${blue}[INFO]${reset} ${msg}`);
+        }
+    },
+    success: (msg) => {
+        if (!isOnboarding) console.log(`${green}[SUCCESS]${reset} ${msg}`);
+    },
+    warn: (msg) => {
+        if (!isOnboarding) console.log(`${yellow}[WARN]${reset} ${msg}`);
+    },
+    error: (msg) => console.log(`${red}[ERROR]${reset} ${msg}`), // Always show errors
+    alert: (msg) => console.log(`${red}${bold}[ALERT]${reset} ${msg}`), // Always show alerts
+    step: (num, title) => console.log(`\n${bold}${cyan}STEP ${num}: ${title}${reset}`),
+    pair: (title, code) => {
+        console.log(`\n${bold}${blue}=== ${title} ===${reset}`);
+        console.log(`${blue}🔑 CODE: ${bold}${code}${reset}`);
+        console.log(`${blue}Enter this code on the target WhatsApp device.${reset}\n`);
+    }
+};
+
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
+});
+
+const askQuestion = (query) => new Promise((resolve) => rl.question(query, resolve));
+
+function updateStatus(botStatus, childStatus) {
+    // console.log(`${cyan}[STATUS] Bot: ${botStatus} | Child: ${childStatus}${reset}`);
+}
+
+// --------------------------------------------------------------------------------
 // Configuration
+// --------------------------------------------------------------------------------
+
+// --------------------------------------------------------------------------------
+// Configuration
+// --------------------------------------------------------------------------------
 const PORT = process.env.PORT || 3000;
 const MONGODB_URI = process.env.MONGODB_URI;
+const PARENT_NUMBER = process.env.PARENT_NUMBER?.replace(/[^0-9]/g, '');
+const BOT_NUMBER = process.env.BOT_NUMBER?.replace(/[^0-9]/g, '');
+
+let PARENT_JID = PARENT_NUMBER ? `${PARENT_NUMBER}@s.whatsapp.net` : null;
+let PARENT_LID = null;
 
 // Initialize Express & Socket.io
 const app = express();
@@ -27,7 +81,7 @@ app.use(bodyParser.json());
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
-        origin: "*", // Allow all origins for now (adjust for production)
+        origin: "*", 
         methods: ["GET", "POST"]
     }
 });
@@ -41,19 +95,16 @@ let notifierSock = null;
 
 // Active Child Sessions: Map<userId, socket>
 const activeChildSessions = new Map();
-
-// Track known parent JIDs so we can greet them on reconnect
-const knownParents = new Set();
+const lastQrMessageKeys = new Map(); // Store message keys for QR codes sent to parent
 
 // Intro message template
-const INTRO_MESSAGE = `👋 *Hello! I'm your Child Safety Bot* 🛡️\n\nI help you monitor your child's WhatsApp for suspicious messages and keep them safe online.\n\n*To get started, send one of these trigger words:*\n• \"Start\"\n• \"start safety\"\n• \"add child\"\n\nOnce triggered, I'll send you a QR code to scan on your child's phone.\n\n📊 You can also ask about your child's activity anytime by saying:\n• \"activity\"\n• \"report\"\n• \"who messaged\"\n• \"last message\"\n\nI'm here to help! 💙`;
+const INTRO_MESSAGE = `👋 *Hello! I'm your Child Safety Bot* 🛡️\n\nI help you monitor your child's WhatsApp for suspicious messages.\n\n*Commands:*\n• \"Start\" or \"Add child\"\n• \"Activity\" or \"Report\"`;
 
 // Helper: Start Notifier Bot (Singleton)
 async function startNotifierBot() {
-    console.log('\n🤖 Starting Safety Bot...\n');
+    log.info('Initializing Safety Bot (Notifier)...');
 
     const { state, saveCreds } = await useMultiFileAuthState('auth_info_notifier');
-
     const { version } = await fetchLatestWaWebVersion();
 
     const sock = makeWASocket({
@@ -64,71 +115,37 @@ async function startNotifierBot() {
         auth: state,
     });
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
-            console.log('\n===================================================');
-            console.log('  SCAN QR TO LINK BOT (or enter phone number below)');
-            console.log('===================================================');
-            qrcodeTerminal.generate(qr, { small: true });
-
-            // Also save as PNG file for easier scanning
-            QRCode.toFile('./notifier_qr.png', qr, { type: 'png' }, function (err) {
-                if (err) console.error('Error saving QR image:', err);
-                else console.log('✅ QR also saved to "notifier_qr.png"');
-            });
-
-            // Offer pairing code via terminal prompt (one-time, never stored)
-            if (!sock.authState.creds.registered && !sock.pairingCodeRequested) {
-                sock.pairingCodeRequested = true;
-
-                const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-                rl.question('\n📱 Enter bot phone number for pairing code (e.g. 2348012345678), or press Enter to use QR: ', async (phone) => {
-                    rl.close();
-                    phone = phone.trim().replace(/[^0-9]/g, '');
-
-                    if (!phone) {
-                        console.log('Using QR code method. Scan the QR above on the bot\'s phone.');
-                        return;
-                    }
-
-                    console.log(`\n⏳ Requesting pairing code for ${phone}...`);
-                    setTimeout(async () => {
-                        try {
-                            let code = await sock.requestPairingCode(phone);
-                            code = code?.match(/.{1,4}/g)?.join('-') || code;
-                            console.log(`\n===================================================`);
-                            console.log(`🔑 PAIRING CODE: ${code}`);
-                            console.log(`   Enter this code on your bot phone's WhatsApp`);
-                            console.log(`===================================================\n`);
-                        } catch (err) {
-                            console.error('\n❌ Failed to request pairing code:', err.message);
-                            console.log('Please scan the QR code instead, or restart and try again.');
-                            sock.pairingCodeRequested = false;
-                        }
-                    }, 1000);
-                });
+        if (qr && !sock.authState.creds.registered) {
+            if (BOT_NUMBER) {
+                log.info(`Requesting pairing code for Bot: ${BOT_NUMBER}`);
+                try {
+                    let code = await sock.requestPairingCode(BOT_NUMBER);
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    log.pair('SAFETY BOT PAIRING', code);
+                } catch (err) {
+                    log.error(`Bot pairing failed: ${err.message}`);
+                }
+            } else {
+                log.warn('BOT_NUMBER missing in .env');
             }
         }
 
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error)?.output?.statusCode;
-            const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-            console.log(`Bot disconnected. Code: ${statusCode} | Reconnecting: ${shouldReconnect}`);
-
-            if (shouldReconnect) {
+            updateStatus('Disconnected', 'Unknown');
+            if (statusCode !== DisconnectReason.loggedOut) {
                 setTimeout(() => startNotifierBot(), 3000);
             }
         } else if (connection === 'open') {
-            console.log('\n✅ BOT ONLINE — Ready to receive onboarding messages!\n');
+            log.success('Safety Bot Online');
+            updateStatus('Online', 'Monitoring...');
             notifierSock = sock;
 
-            // Send intro message to all known parents on reconnect
-            for (const parentJid of knownParents) {
-                sock.sendMessage(parentJid, { text: `✅ *Bot is back online!*\n\n${INTRO_MESSAGE}` }).catch(err => {
-                    console.error(`Failed to send reconnect intro to ${parentJid}:`, err.message);
-                });
+            if (PARENT_JID) {
+                sock.sendMessage(PARENT_JID, { text: `✅ *Bot is back online!*\n\n${INTRO_MESSAGE}` }).catch(() => {});
             }
         }
     });
@@ -139,213 +156,194 @@ async function startNotifierBot() {
         const msg = m.messages[0];
         if (!msg.key.fromMe && m.type === 'notify') {
             const senderJid = msg.key.remoteJid;
+            
+            // Check if this is the first message from the parent we're expecting
+            if (!PARENT_JID && !PARENT_LID) {
+                log.warn(`[Security] No Parent Number set. Waiting for setup tool.`);
+            }
+
+            // Flexible Parent Check (Handles both JID and LID)
+            let isAuthorized = !PARENT_JID || 
+                                senderJid === PARENT_JID || 
+                                (PARENT_LID && senderJid === PARENT_LID);
+
+            if (!isAuthorized) {
+                log.warn(`Security: Ignored message from unauthorized number: ${senderJid}`);
+                // Debug info to help user
+                log.info(`Waiting for message from: ${PARENT_JID || 'Setup Not Run'} or LID: ${PARENT_LID || 'Not Resolved'}`);
+                return;
+            }
+
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+            if (text) log.info(`Parent: "${text}"`);
 
-            if (text) console.log(`📩 Bot received: "${text}"`);
+            if (text.toLowerCase().includes('start') || text.toLowerCase().includes('add child')) {
+                log.info(`Onboarding triggered by parent.`);
+                
+                // If we didn't have an LID yet and the parent sent this, learn it!
+                if (senderJid.endsWith('@lid') && !PARENT_LID) {
+                    PARENT_LID = senderJid;
+                    log.success(`Learned Parent LID: ${PARENT_LID}`);
+                }
 
-            // Track this parent
-            knownParents.add(senderJid);
+                await sock.sendMessage(senderJid, { text: '🛡️ *Setting up child monitoring...*' });
 
-            // Chat-Based Onboarding Trigger
-            if (text.toLowerCase().includes('start safety') || text.toLowerCase().includes('add child') || text === 'Start') {
-                console.log(`🚀 Onboarding started!`);
-
-                await sock.sendMessage(senderJid, { text: 'Welcome to Child Safety! 🛡️\nSetting up your secure session...' });
-
-                // Use sender's JID as the user identifier
                 const parentId = senderJid.split('@')[0];
                 const userId = `${parentId}_child`;
-                console.log(`👤 Parent JID captured: ${senderJid}`);
 
-                // Track last sent QR message to delete it before sending new one
-                let lastQrMessageKey = null;
-
-                // Start Child Session — pass full senderJid so alerts route correctly
-                startChildSession(userId, senderJid, async (qrString) => {
-                    console.log(`📸 Sending QR Code to parent...`);
-                    try {
-                        // 1. Delete Previous QR if exists
-                        if (lastQrMessageKey) {
-                            await sock.sendMessage(senderJid, { delete: lastQrMessageKey });
-                        }
-
-                        // 2. Generate QR Buffer
-                        const qrBuffer = await QRCode.toBuffer(qrString);
-
-                        // 3. Send Image to Parent with Caption
-                        const sentMsg = await sock.sendMessage(senderJid, {
-                            image: qrBuffer,
-                            caption: "Scan this code with your Child's device (Linked Devices) to start monitoring.\n\n⏳ *QR Code expires in 20 seconds...*"
-                        });
-
-                        // 4. Save Key for next deletion
-                        lastQrMessageKey = sentMsg.key;
-
-                    } catch (e) {
-                        console.error('❌ Failed to send QR code');
-                        await sock.sendMessage(senderJid, { text: 'Error generating QR code. Please try again.' });
-                    }
-                });
-
-            } else if (text.toLowerCase().includes('activity') ||
-                text.toLowerCase().includes('who messaged') ||
-                text.toLowerCase().includes('last message') ||
-                text.toLowerCase().includes('report') ||
-                text.toLowerCase().includes('last person') ||
-                (text.toLowerCase().includes('who') && text.toLowerCase().includes('text'))) {
-
-                // RAG: Activity Summary
+                startChildSession(userId, senderJid);
+            } else if (text.toLowerCase().includes('activity') || text.toLowerCase().includes('report')) {
                 const parentPhone = senderJid.split('@')[0];
                 const userId = `${parentPhone}_child`;
-                console.log(`📊 Activity report requested`);
+                log.info(`Parent requested activity report.`);
 
                 if (!db) {
-                    await sock.sendMessage(senderJid, { text: "⚠️ Database not connected. Cannot fetch history." });
+                    await sock.sendMessage(senderJid, { text: "⚠️ Database not connected." });
                     return;
                 }
 
                 try {
-                    // 1. Fetch last 20 messages for this child
                     const recentMessages = await db.collection('message_logs')
                         .find({ userId })
                         .sort({ timestamp: -1 })
                         .limit(20)
                         .toArray();
 
-                    // 2. Summarize with LLM
                     const summary = await summarizeActivity(recentMessages, text);
-
-                    // 3. Reply
                     await sock.sendMessage(senderJid, { text: summary });
-
                 } catch (e) {
-                    console.error('❌ Failed to fetch activity');
-                    await sock.sendMessage(senderJid, { text: "⚠️ Error fetching activity logs." });
+                    log.error(`Failed to fetch activity: ${e.message}`);
                 }
             } else if (text) {
-                // Unrecognized message — send intro with trigger words
                 await sock.sendMessage(senderJid, { text: INTRO_MESSAGE });
             }
         }
     });
-
 }
 
 // Helper: Start Child Monitor Session (per User)
-async function startChildSession(userId, parentJid, onQR) {
-    console.log(`Starting Child Session for User: ${userId}`);
-    console.log(`   Parent JID: ${parentJid}`);
-
-    // In a real app, use useMongoDBAuthState here. 
-    // For this prototype, we'll use a unique file folder per user to guarantee stability 
-    // before switching complex Mongo adapter logic.
-    // const { state, saveCreds } = await useMongoDBAuthState(db.collection('sessions'), userId);
+async function startChildSession(userId, parentJid, childNumber) {
+    log.info(`[Child] Starting Session: ${userId}`);
 
     const authFolder = `auth_info_child_${userId}`;
     const { state, saveCreds } = await useMultiFileAuthState(authFolder);
     const { version } = await fetchLatestWaWebVersion();
 
-    // Custom Silent Logger to suppress "Closing session" noise
-    const silentLogger = pino({ level: 'silent' });
-
     const sock = makeWASocket({
         version,
-        logger: silentLogger,
-        printQRInTerminal: false, // We'll send QR via Socket.io
+        logger: pino({ level: 'silent' }),
+        printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
     });
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect, qr } = update;
 
-        if (qr) {
-            // Emit QR code to the specific user's frontend room
-            io.to(userId).emit('qr_code', qr);
-            console.log(`QR Code generated for user ${userId}`);
+        if (qr && !sock.authState.creds.registered) {
+            log.info(`[Child] New QR Code generated.`);
+            
+            // 1. Terminal Output (Keep as fallback)
+            if (!childNumber) {
+                qrcodeTerminal.generate(qr, { small: true });
+            }
 
-            // Callback for Chat-Based Onboarding
-            if (onQR) {
-                onQR(qr);
+            // 2. Send to Parent's WhatsApp
+            if (notifierSock && PARENT_JID) {
+                try {
+                    // Delete previous QR message if it exists
+                    const prevKey = lastQrMessageKeys.get(userId);
+                    if (prevKey) {
+                        await notifierSock.sendMessage(PARENT_JID, { delete: prevKey }).catch(() => {});
+                    }
+
+                    // Generate QR Image Buffer
+                    const qrBuffer = await QRCode.toBuffer(qr);
+
+                    // Send new QR Message
+                    const sentMsg = await notifierSock.sendMessage(PARENT_JID, {
+                        image: qrBuffer,
+                        caption: `📸 *Child Device Link Required*\n\nScan this QR code with the child's WhatsApp (Linked Devices) to begin monitoring.\n\n_Note: This code refreshes automatically._`
+                    });
+
+                    // Store key for next refresh
+                    lastQrMessageKeys.set(userId, sentMsg.key);
+                } catch (err) {
+                    log.error(`Failed to send QR to parent: ${err.message}`);
+                }
+            }
+
+            if (childNumber) {
+                log.info(`[Child] Pairing Code for ${childNumber}:`);
+                try {
+                    let code = await sock.requestPairingCode(childNumber.replace(/[^0-9]/g, ''));
+                    code = code?.match(/.{1,4}/g)?.join('-') || code;
+                    console.log(`\n  🔑  ${bold}${cyan}${code}${reset}\n`);
+                    log.info("Enter this code on the Child's WhatsApp.");
+                    
+                    // Also send pairing code to parent via WhatsApp
+                    if (notifierSock && PARENT_JID) {
+                        await notifierSock.sendMessage(PARENT_JID, {
+                            text: `🔑 *Child Pairing Code*\n\nCode: *${code}*\n\nEnter this code on the child's WhatsApp (Link with phone number).`
+                        }).catch(() => {});
+                    }
+                } catch (err) {
+                    log.error(`[Child] Pairing failed: ${err.message}`);
+                }
             }
         }
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            // console.log(`Child Session ${userId} closed. Reconnecting: ${shouldReconnect}`);
-            io.to(userId).emit('status', 'disconnected');
-
-            if (shouldReconnect) {
-                startChildSession(userId, parentJid, onQR);
-            } else {
+            if (shouldReconnect) startChildSession(userId, parentJid);
+            else {
                 activeChildSessions.delete(userId);
+                updateStatus('Online', 'Disconnected');
             }
         } else if (connection === 'open') {
-            console.log(`✅ Child device connected! Monitoring is now ACTIVE.`);
-            io.to(userId).emit('status', 'connected');
+            log.success(`Child Device Connected: ${userId}`);
+            updateStatus('Online', 'Monitoring Active');
             activeChildSessions.set(userId, sock);
+            io.to(userId).emit('status', 'connected');
 
-            // Notify Parent using their original JID (works for both LID and phone-number JIDs)
+            // Cleanup QR message from parent's chat
+            const prevKey = lastQrMessageKeys.get(userId);
+            if (notifierSock && PARENT_JID && prevKey) {
+                await notifierSock.sendMessage(PARENT_JID, { delete: prevKey }).catch(() => {});
+                lastQrMessageKeys.delete(userId);
+            }
+
             if (notifierSock && parentJid) {
-                console.log(`   📤 Notifying parent: ${parentJid}`);
-                notifierSock.sendMessage(parentJid, { text: '✅ Child Device Connected Successfully!\nMonitoring is now active.' }).catch(console.error);
+                notifierSock.sendMessage(parentJid, { text: '✅ Child Device Connected Successfully!\nMonitoring is now active.' }).catch(() => {});
             }
         }
     });
 
     sock.ev.on('creds.update', saveCreds);
 
-    // Message Listening Logic
     sock.ev.on('messages.upsert', async (m) => {
-        // console.log(JSON.stringify(m, null, 2)); // DEBUG: Dump full event
         const msg = m.messages[0];
         if (!msg.key.fromMe && m.type === 'notify') {
             const sender = msg.pushName || msg.key.remoteJid;
+            const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
 
-            const text = msg.message?.conversation ||
-                msg.message?.extendedTextMessage?.text ||
-                msg.message?.imageMessage?.caption || '';
-
-            // Clean readable log
             if (text) {
-                console.log(`💬 ${sender}: "${text}"`);
-            } else {
-                console.log(`📎 ${sender}: [media/attachment]`);
-            }
+                log.info(`[MSG] ${sender}: "${text}"`);
+                if (db) {
+                    db.collection('message_logs').insertOne({
+                        userId, senderJid: msg.key.remoteJid, senderName: sender,
+                        content: text, timestamp: new Date()
+                    }).catch(() => {});
+                }
 
-            // RAG: Log Message to MongoDB
-            if (db && text) {
-                const logData = {
-                    userId,
-                    senderJid: msg.key.remoteJid,
-                    senderName: sender,
-                    content: text,
-                    timestamp: new Date()
-                };
-                db.collection('message_logs').insertOne(logData).catch(err => console.error('Failed to log message:', err));
-            }
-
-            if (text && text.length > 5) {
-                const isUnsafe = await analyzeMessage(text);
-
-                if (isUnsafe) {
-                    console.log(`\n🚨🚨🚨 UNSAFE MESSAGE DETECTED 🚨🚨🚨`);
-                    console.log(`   From: ${sender}`);
-                    console.log(`   Content: "${text}"`);
-
-                    // Send Alert via Notifier Bot to the Parent (using their original JID)
-                    if (notifierSock && parentJid) {
-                        const alertMsg = `🚨 *SAFETY ALERT* 🚨\nSuspicious message on child's device!\nFrom: ${sender}\nContent: "${text}"`;
-                        console.log(`   📤 Sending alert to: ${parentJid}`);
-
-                        try {
-                            await notifierSock.sendMessage(parentJid, { text: alertMsg });
-                            console.log(`   ✅ Alert sent to parent!\n`);
-                        } catch (e) {
-                            console.error(`   ❌ Failed to send alert to parent:`, e.message, '\n');
+                if (text.length > 5) {
+                    const isUnsafe = await analyzeMessage(text);
+                    if (isUnsafe) {
+                        log.alert(`${sender}: "${text}"`);
+                        if (notifierSock && parentJid) {
+                            const alertMsg = `🚨 *SAFETY ALERT*\nSuspicious message detected!\nFrom: ${sender}\nContent: "${text}"`;
+                            notifierSock.sendMessage(parentJid, { text: alertMsg }).catch(() => {});
                         }
-                    } else {
-                        console.error(`   ❌ Cannot send alert — Notifier Bot not connected\n`);
                     }
                 }
             }
@@ -358,7 +356,6 @@ const memoryStore = {
     users: new Map()
 };
 
-// Helper to get user data (DB or Memory)
 async function upsertUserOTP(phoneNumber, otp, otpExpires) {
     if (db) {
         await db.collection('users').updateOne(
@@ -367,7 +364,6 @@ async function upsertUserOTP(phoneNumber, otp, otpExpires) {
             { upsert: true }
         );
     } else {
-        console.log('[WARN] MongoDB not connected. Using In-Memory Store.');
         let user = memoryStore.users.get(phoneNumber) || { phoneNumber };
         user.otp = otp;
         user.otpExpires = otpExpires;
@@ -396,129 +392,189 @@ async function clearUserOTP(phoneNumber) {
     }
 }
 
-// --------------------------------------------------------------------------------
 // API Endpoints
-// --------------------------------------------------------------------------------
-
-// 1. Send OTP (Simulated for Prototype)
 app.post('/api/auth/login', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'Phone number required' });
-
-    // Generate simulated OTP
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
-    console.log(`OTP for ${phoneNumber}: ${otp}`);
-
-    // Store OTP
     try {
         await upsertUserOTP(phoneNumber, otp, Date.now() + 300000);
-    } catch (e) {
-        console.error('DB Error:', e);
-        return res.status(500).json({ error: 'Database error' });
-    }
-
-    // Send OTP via WhatsApp Notifier (if available)
-    if (notifierSock) {
-        const targetJid = `${phoneNumber}@s.whatsapp.net`;
-        try {
+        if (notifierSock) {
+            const targetJid = `${phoneNumber}@s.whatsapp.net`;
             await notifierSock.sendMessage(targetJid, { text: `Your Safety App Login Code: ${otp}` });
-        } catch (e) {
-            console.error('Could not send OTP via WhatsApp:', e);
         }
+        res.json({ success: true, message: 'OTP sent' });
+    } catch (e) {
+        res.status(500).json({ error: 'Internal error' });
     }
-
-    res.json({ success: true, message: 'OTP sent' });
 });
 
-// 2. Verify OTP
 app.post('/api/auth/verify', async (req, res) => {
     const { phoneNumber, otp } = req.body;
-
     try {
         const user = await verifyUserOTP(phoneNumber, otp);
-
         if (user && user.otp === otp && Date.now() < user.otpExpires) {
-            // Clear OTP
             await clearUserOTP(phoneNumber);
-            // Return ID (use phone as ID for memory store if no _id)
+            
+            // Dynamically set Parent JID upon successful verification
+            const cleanNumber = phoneNumber.replace(/[^0-9]/g, '');
+            PARENT_JID = `${cleanNumber}@s.whatsapp.net`;
+            
+            // Try to resolve the LID for this number immediately
+            try {
+                const [result] = await notifierSock.onWhatsApp(cleanNumber);
+                if (result && result.lid) {
+                    PARENT_LID = result.lid;
+                    log.success(`Resolved Parent LID: ${PARENT_LID}`);
+                }
+            } catch (err) {
+                log.warn(`Could not resolve LID for parent number yet. It will be mapped on the first message.`);
+            }
+
+            log.success(`Session verified. Parent JID set to: ${PARENT_JID}`);
+
             const userId = user._id ? user._id.toString() : user.phoneNumber;
             res.json({ success: true, userId });
         } else {
             res.status(401).json({ error: 'Invalid or expired OTP' });
         }
     } catch (e) {
-        console.error('DB Error:', e);
         res.status(500).json({ error: 'Internal error' });
     }
 });
 
-// 3. Start Monitoring Session
 app.post('/api/monitor/start', async (req, res) => {
-    const { userId, parentJid } = req.body;
+    const { userId, parentJid, childNumber } = req.body;
     if (!userId) return res.status(400).json({ error: 'User ID required' });
-
-    // Start session async
-    startChildSession(userId, parentJid).catch(console.error);
-
+    startChildSession(userId, parentJid, childNumber).catch(err => log.error(err.message));
     res.json({ success: true, message: 'Session initialization started' });
 });
 
-// 4. Test Alert (for debugging)
 app.post('/api/test-alert', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' });
     if (!notifierSock) return res.status(503).json({ error: 'Notifier Bot not connected yet' });
-
     const targetJid = `${phoneNumber.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
     try {
         await notifierSock.sendMessage(targetJid, {
-            text: `🚨 *TEST SAFETY ALERT* 🚨\nThis is a test alert from the Child Safety Bot.\nIf you received this, alerts are working correctly! ✅`
+            text: `🚨 *TEST SAFETY ALERT* 🚨\nThis is a test alert from the Child Safety Bot.`
         });
-        console.log(`✅ Test alert sent to ${targetJid}`);
         res.json({ success: true, message: `Test alert sent to ${phoneNumber}` });
     } catch (e) {
-        console.error(`❌ Failed to send test alert:`, e.message);
         res.status(500).json({ error: 'Failed to send test alert' });
     }
 });
 
-// Socket.io Connection Helper
 io.on('connection', (socket) => {
-    console.log('Frontend connected:', socket.id);
-
-    // User joins their own room based on ID
     socket.on('join_room', (userId) => {
         socket.join(userId);
-        console.log(`Socket ${socket.id} joined room ${userId}`);
     });
 });
 
-// Initialization
+// --------------------------------------------------------------------------------
+// Onboarding Flow Logic (Integrated)
+// --------------------------------------------------------------------------------
+async function runInteractiveOnboarding() {
+    isOnboarding = true;
+    console.log(`\n${bold}${blue}=============================================`);
+    console.log(`🛡️  CHILD SAFETY BOT — SETUP`);
+    console.log(`=============================================${reset}`);
+
+    try {
+        log.step(1, "Authentication");
+        const phoneNumber = await askQuestion(`${bold}  Enter Parent Phone Number (e.g., 234...): ${reset}`);
+        if (!phoneNumber) {
+            isOnboarding = false;
+            return;
+        }
+
+        const otpSent = await handleLoginRequest(phoneNumber);
+        if (!otpSent) {
+            isOnboarding = false;
+            return;
+        }
+
+        const otp = await askQuestion(`${bold}  Enter the 6-digit OTP Code: ${reset}`);
+        const userId = await handleVerifyRequest(phoneNumber, otp);
+        
+        if (!userId) {
+            isOnboarding = false;
+            return runInteractiveOnboarding();
+        }
+
+        log.step(2, "Link Child Device");
+        const childNumber = await askQuestion(`${bold}  Enter Child Phone Number (or Enter for QR): ${reset}`);
+        
+        isOnboarding = false; // Re-enable logs before starting session
+        log.info("Initializing connection...");
+        await startChildSession(userId, PARENT_JID, childNumber);
+
+    } catch (error) {
+        log.error(`Onboarding Error: ${error.message}`);
+    } finally {
+        isOnboarding = false;
+    }
+}
+
+async function handleLoginRequest(phoneNumber) {
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    try {
+        await upsertUserOTP(phoneNumber, otp, Date.now() + 300000);
+        if (notifierSock) {
+            const targetJid = `${phoneNumber.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+            await notifierSock.sendMessage(targetJid, { text: `🛡️ Your Child Safety App Login Code: ${otp}` });
+            log.success(`OTP Sent successfully to ${phoneNumber} via WhatsApp.`);
+            return true;
+        } else {
+            log.error("Safety Bot not ready. Wait a moment and try again.");
+            return false;
+        }
+    } catch (e) {
+        log.error(`Failed to send OTP: ${e.message}`);
+        return false;
+    }
+}
+
+async function handleVerifyRequest(phoneNumber, otp) {
+    const user = await verifyUserOTP(phoneNumber, otp);
+    if (user && user.otp === otp && Date.now() < user.otpExpires) {
+        await clearUserOTP(phoneNumber);
+        PARENT_JID = `${phoneNumber.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+        log.success(`Login Successful! Parent set to: ${PARENT_JID}`);
+        return user._id ? user._id.toString() : user.phoneNumber;
+    } else {
+        log.error("Invalid or expired OTP.");
+        return null;
+    }
+}
+
 async function init() {
     try {
         await mongoClient.connect();
         db = mongoClient.db('child_safety_app');
-        console.log('Connected to MongoDB');
+        log.success('Connected to MongoDB');
     } catch (err) {
-        console.error('------------------------------------------------');
-        console.error('WARNING: Failed to connect to MongoDB.');
-        console.error('Running in IN-MEMORY mode. Data will be lost on restart.');
-        console.error('Error:', err.message);
-        console.error('------------------------------------------------');
-        // db remains undefined, endpoints will use fallback
+        log.warn('MongoDB Failed. Using In-Memory mode.');
     }
+    
+    server.listen(PORT, () => {
+        log.info(`Background API Server running on port ${PORT}`);
+    });
 
-    // Start the Main Notifier Bot
-    // We allow this to start even if DB fails
     try {
         await startNotifierBot();
-    } catch (err) {
-        console.error('Failed to start Notifier Bot:', err);
-    }
+        
+        // Wait for bot to be online before starting onboarding
+        const checkOnline = setInterval(() => {
+            if (notifierSock) {
+                clearInterval(checkOnline);
+                runInteractiveOnboarding();
+            }
+        }, 1000);
 
-    server.listen(PORT, () => {
-        console.log(`Server running on port ${PORT}`);
-    });
+    } catch (err) {
+        log.error(`Critical Error: ${err.message}`);
+    }
 }
 
 init();
