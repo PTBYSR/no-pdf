@@ -48,6 +48,8 @@ You MUST understand these Nigerian Pidgin expressions and slangs when detecting 
 - Normal friendly pidgin conversation is SAFE. Only flag genuinely threatening/sexual/grooming content.
 - Casual slangs like "wetin dey", "how far", "I dey", "na so" are SAFE.
 - Teen slang between peers like "you dey whine me", "no cap", "sabi" is usually SAFE.
+- Normal, everyday English conversation, general questions, and technical discussions (e.g. about bots, software, features) are completely SAFE.
+- DO NOT flag messages just because they are short, ask questions, or are from an unknown sender.
 - BUT if any of these are combined with sexual pressure, secrecy, or threats, flag as UNSAFE.
 
 Your task: Analyze the message below and return "UNSAFE" if it contains:
@@ -60,7 +62,8 @@ Your task: Analyze the message below and return "UNSAFE" if it contains:
 If the message contains ANY indication of the above (in English, Pidgin, or mixed), return "UNSAFE".
 If the message is clearly safe, casual, or unrelated, return "SAFE".
 
-Respond ONLY with "SAFE" or "UNSAFE". No explanation.`;
+If UNSAFE, respond with "UNSAFE:" followed by a very brief (1-3 words) reason. For example: "UNSAFE: Grooming attempt" or "UNSAFE: Bullying/Threat".
+If SAFE, respond ONLY with "SAFE".`;
 
 const SUMMARY_SYSTEM_PROMPT = `You are a helpful safety assistant for Nigerian parents. You understand Nigerian Pidgin English, Nigerian English, and local slangs fluently.
 
@@ -85,14 +88,19 @@ async function analyzeMessage(messageText) {
             new HumanMessage(messageText),
         ]);
 
-        const result = response.content.trim().toUpperCase();
+        const result = response.content.trim();
 
-        // If it detects unsafe content, return true (danger)
-        return result.includes("UNSAFE");
+        if (result.toUpperCase().startsWith("UNSAFE")) {
+            const reasonParts = result.split(":");
+            const reason = reasonParts.length > 1 ? reasonParts.slice(1).join(":").trim() : "Suspicious content detected";
+            return { isUnsafe: true, reason: reason };
+        }
+
+        return { isUnsafe: false };
     } catch (error) {
         console.error("Error analyzing message with Groq:", error.message);
         // Fail safe (or fail open depending on policy, here fail safe to avoid spamming alerts on error)
-        return false;
+        return { isUnsafe: false };
     }
 }
 

@@ -1,4 +1,5 @@
 require('dotenv').config();
+const fs = require('fs');
 const readline = require('readline');
 const express = require('express');
 const http = require('http');
@@ -11,6 +12,19 @@ const qrcodeTerminal = require('qrcode-terminal');
 const cors = require('cors');
 const bodyParser = require('body-parser');
 const { analyzeMessage, summarizeActivity } = require('./detection_agent');
+
+// --------------------------------------------------------------------------------
+// Suppress noisy Baileys session dumps
+// --------------------------------------------------------------------------------
+const _origConsoleLog = console.log;
+console.log = (...args) => {
+    for (const a of args) {
+        if (typeof a === 'string' && (a.includes('Closing session') || a.includes('SessionEntry'))) return;
+        if (a && typeof a === 'object' && a.constructor && a.constructor.name === 'SessionEntry') return;
+        if (a && typeof a === 'object' && a._chains && a.currentRatchet) return; // duck-type SessionEntry
+    }
+    _origConsoleLog.apply(console, args);
+};
 
 // --------------------------------------------------------------------------------
 // Minimal Logger Setup
@@ -98,21 +112,23 @@ const activeChildSessions = new Map();
 const lastQrMessageKeys = new Map(); // Store message keys for QR codes sent to parent
 
 // Intro message template
-const INTRO_MESSAGE = `👋 *Hello! I'm your Child Safety Bot* 🛡️\n\nI help you monitor your child's WhatsApp for suspicious messages.\n\n*Commands:*\n• \"Start\" or \"Add child\"\n• \"Activity\" or \"Report\"`;
+const INTRO_MESSAGE = `👋 *Hello! I'm your Child Safety Bot* 🛡️\n\nI help you monitor your child's WhatsApp for suspicious messages.\n\n*Available Commands:*\n• */start* - Link a new child device\n• */activity* or */report* - Get a summary of recent chats\n• */status* - Check connection status and last active time\n• */block <number>* - Block a specific contact on the child's phone\n• */reset child* - Remove the current child device\n• */help* - Show this message`;
 
 // Helper: Start Notifier Bot (Singleton)
 async function startNotifierBot() {
     log.info('Initializing Safety Bot (Notifier)...');
 
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_notifier');
+    const silentLogger = pino({ level: 'silent' });
+    const { state, saveCreds } = await useMultiFileAuthState('auth_info_notifier', silentLogger);
     const { version } = await fetchLatestWaWebVersion();
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }),
+        logger: silentLogger,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
+        qrTimeout: 120000, // 2 minutes before QR expires
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -129,20 +145,41 @@ async function startNotifierBot() {
                     log.error(`Bot pairing failed: ${err.message}`);
                 }
             } else {
-                log.warn('BOT_NUMBER missing in .env');
+                log.warn('BOT_NUMBER missing in .env. Displaying QR code instead:');
+                qrcodeTerminal.generate(qr, { small: true });
             }
         }
 
         if (connection === 'close') {
             const statusCode = (lastDisconnect.error)?.output?.statusCode;
+            const reason = (lastDisconnect.error)?.message || 'Unknown error';
+            log.error(`Safety Bot connection closed (Status: ${statusCode}, Reason: ${reason})`);
+            
             updateStatus('Disconnected', 'Unknown');
             if (statusCode !== DisconnectReason.loggedOut) {
+                log.info('Retrying connection in 3 seconds...');
                 setTimeout(() => startNotifierBot(), 3000);
             }
         } else if (connection === 'open') {
             log.success('Safety Bot Online');
             updateStatus('Online', 'Monitoring...');
             notifierSock = sock;
+
+            // Resolve Parent LID on startup
+            if (PARENT_NUMBER && !PARENT_LID) {
+                try {
+                    const [result] = await sock.onWhatsApp(PARENT_NUMBER);
+                    if (result && result.jid) {
+                        // Some versions return LID in the jid field for lid-based accounts
+                        if (result.jid.endsWith('@lid')) {
+                            PARENT_LID = result.jid;
+                            log.success(`Resolved Parent LID: ${PARENT_LID}`);
+                        }
+                    }
+                } catch (err) {
+                    log.warn(`Could not resolve Parent LID on startup: ${err.message}`);
+                }
+            }
 
             if (PARENT_JID) {
                 sock.sendMessage(PARENT_JID, { text: `✅ *Bot is back online!*\n\n${INTRO_MESSAGE}` }).catch(() => {});
@@ -167,9 +204,15 @@ async function startNotifierBot() {
                                 senderJid === PARENT_JID || 
                                 (PARENT_LID && senderJid === PARENT_LID);
 
+            // Auto-learn LID: if sender is a LID and we haven't mapped one yet, accept and learn it
+            if (!isAuthorized && senderJid.endsWith('@lid') && PARENT_JID && !PARENT_LID) {
+                PARENT_LID = senderJid;
+                isAuthorized = true;
+                log.success(`Auto-learned Parent LID: ${PARENT_LID}`);
+            }
+
             if (!isAuthorized) {
                 log.warn(`Security: Ignored message from unauthorized number: ${senderJid}`);
-                // Debug info to help user
                 log.info(`Waiting for message from: ${PARENT_JID || 'Setup Not Run'} or LID: ${PARENT_LID || 'Not Resolved'}`);
                 return;
             }
@@ -177,7 +220,7 @@ async function startNotifierBot() {
             const text = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
             if (text) log.info(`Parent: "${text}"`);
 
-            if (text.toLowerCase().includes('start') || text.toLowerCase().includes('add child')) {
+            if (text.toLowerCase().startsWith('/start') || text.toLowerCase().startsWith('/add child')) {
                 log.info(`Onboarding triggered by parent.`);
                 
                 // If we didn't have an LID yet and the parent sent this, learn it!
@@ -192,7 +235,7 @@ async function startNotifierBot() {
                 const userId = `${parentId}_child`;
 
                 startChildSession(userId, senderJid);
-            } else if (text.toLowerCase().includes('activity') || text.toLowerCase().includes('report')) {
+            } else if (text.toLowerCase().startsWith('/activity') || text.toLowerCase().startsWith('/report')) {
                 const parentPhone = senderJid.split('@')[0];
                 const userId = `${parentPhone}_child`;
                 log.info(`Parent requested activity report.`);
@@ -214,6 +257,80 @@ async function startNotifierBot() {
                 } catch (e) {
                     log.error(`Failed to fetch activity: ${e.message}`);
                 }
+            } else if (text.toLowerCase().startsWith('/block ')) {
+                const targetNumber = text.split(' ')[1];
+                if (!targetNumber) return;
+                
+                const targetJid = `${targetNumber.replace(/[^0-9]/g, '')}@s.whatsapp.net`;
+                
+                // Get the child socket
+                const parentPhone = senderJid.split('@')[0];
+                const userId = `${parentPhone}_child`;
+                const childSock = activeChildSessions.get(userId);
+
+                if (childSock) {
+                    try {
+                        await childSock.updateBlockStatus(targetJid, 'block');
+                        await sock.sendMessage(senderJid, { text: `✅ Successfully blocked ${targetNumber} on the child's device.` });
+                        log.success(`Blocked ${targetJid} on child device ${userId}`);
+                    } catch (err) {
+                        await sock.sendMessage(senderJid, { text: `❌ Failed to block ${targetNumber}: ${err.message}` });
+                        log.error(`Failed to block ${targetJid}: ${err.message}`);
+                    }
+                } else {
+                    await sock.sendMessage(senderJid, { text: `⚠️ Child device is not currently connected. Cannot block.` });
+                }
+            } else if (text.toLowerCase().startsWith('/status')) {
+                const parentPhone = senderJid.split('@')[0];
+                const userId = `${parentPhone}_child`;
+                const childSock = activeChildSessions.get(userId);
+
+                let statusMsg = `📊 *Status Report*\n\n`;
+                if (childSock) {
+                    statusMsg += `🟢 *Connection:* Online & Monitoring\n`;
+                    if (db) {
+                        try {
+                            const lastMsg = await db.collection('message_logs')
+                                .findOne({ userId }, { sort: { timestamp: -1 } });
+                            if (lastMsg) {
+                                statusMsg += `🕒 *Last Active:* ${lastMsg.timestamp.toLocaleString()}\n`;
+                            } else {
+                                statusMsg += `🕒 *Last Active:* No messages logged yet\n`;
+                            }
+                        } catch (e) {
+                            statusMsg += `🕒 *Last Active:* Unknown\n`;
+                        }
+                    }
+                } else {
+                    statusMsg += `🔴 *Connection:* Disconnected (or not linked)\n`;
+                }
+                
+                await sock.sendMessage(senderJid, { text: statusMsg });
+            } else if (text.toLowerCase().startsWith('/reset child')) {
+                const parentPhone = senderJid.split('@')[0];
+                const userId = `${parentPhone}_child`;
+                const childSock = activeChildSessions.get(userId);
+
+                if (childSock) {
+                    await sock.sendMessage(senderJid, { text: `🔄 Logging out of child device...` });
+                    try {
+                        await childSock.logout();
+                        activeChildSessions.delete(userId);
+                        await sock.sendMessage(senderJid, { text: `✅ Child device removed! You can now send */start* to pair a new one.` });
+                        log.success(`Child session reset for ${userId}`);
+                    } catch (err) {
+                        await sock.sendMessage(senderJid, { text: `❌ Failed to log out: ${err.message}` });
+                    }
+                } else {
+                    const authFolder = `auth_info_child_${userId}`;
+                    if (fs.existsSync(authFolder)) {
+                        fs.rmSync(authFolder, { recursive: true, force: true });
+                        await sock.sendMessage(senderJid, { text: `✅ Child data cleared! You can now send */start* to pair a new one.` });
+                        log.success(`Cleared stale auth folder for ${userId}`);
+                    } else {
+                        await sock.sendMessage(senderJid, { text: `⚠️ No active child device found to reset.` });
+                    }
+                }
             } else if (text) {
                 await sock.sendMessage(senderJid, { text: INTRO_MESSAGE });
             }
@@ -225,16 +342,18 @@ async function startNotifierBot() {
 async function startChildSession(userId, parentJid, childNumber) {
     log.info(`[Child] Starting Session: ${userId}`);
 
+    const silentLogger = pino({ level: 'silent' });
     const authFolder = `auth_info_child_${userId}`;
-    const { state, saveCreds } = await useMultiFileAuthState(authFolder);
+    const { state, saveCreds } = await useMultiFileAuthState(authFolder, silentLogger);
     const { version } = await fetchLatestWaWebVersion();
 
     const sock = makeWASocket({
         version,
-        logger: pino({ level: 'silent' }),
+        logger: silentLogger,
         printQRInTerminal: false,
         browser: Browsers.ubuntu('Chrome'),
         auth: state,
+        qrTimeout: 120000, // 2 minutes before QR expires
     });
 
     sock.ev.on('connection.update', async (update) => {
@@ -295,7 +414,7 @@ async function startChildSession(userId, parentJid, childNumber) {
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startChildSession(userId, parentJid);
+            if (shouldReconnect) startChildSession(userId, parentJid, childNumber);
             else {
                 activeChildSessions.delete(userId);
                 updateStatus('Online', 'Disconnected');
@@ -337,11 +456,12 @@ async function startChildSession(userId, parentJid, childNumber) {
                 }
 
                 if (text.length > 5) {
-                    const isUnsafe = await analyzeMessage(text);
-                    if (isUnsafe) {
-                        log.alert(`${sender}: "${text}"`);
+                    const analysis = await analyzeMessage(text);
+                    if (analysis.isUnsafe) {
+                        log.alert(`${sender}: "${text}" - Reason: ${analysis.reason}`);
                         if (notifierSock && parentJid) {
-                            const alertMsg = `🚨 *SAFETY ALERT*\nSuspicious message detected!\nFrom: ${sender}\nContent: "${text}"`;
+                            const senderPhone = msg.key.remoteJid.split('@')[0];
+                            const alertMsg = `🚨 *SAFETY ALERT*\nSuspicious message detected!\n\n*From:* ${sender} (${senderPhone})\n*Reason:* ${analysis.reason}\n\n*Message:*\n"${text}"\n\n_Reply with "/block ${senderPhone}" to block this contact on your child's phone._`;
                             notifierSock.sendMessage(parentJid, { text: alertMsg }).catch(() => {});
                         }
                     }
@@ -481,28 +601,37 @@ async function runInteractiveOnboarding() {
     console.log(`=============================================${reset}`);
 
     try {
-        log.step(1, "Authentication");
-        const phoneNumber = await askQuestion(`${bold}  Enter Parent Phone Number (e.g., 234...): ${reset}`);
-        if (!phoneNumber) {
-            isOnboarding = false;
-            return;
+        let userId;
+
+        // Skip auth if PARENT_NUMBER is already set in .env
+        if (PARENT_NUMBER) {
+            log.success(`Parent number loaded from .env: ${PARENT_NUMBER}`);
+            log.info('Skipping authentication (already configured).');
+            userId = `${PARENT_NUMBER}_child`;
+        } else {
+            log.step(1, "Authentication");
+            const phoneNumber = await askQuestion(`${bold}  Enter Parent Phone Number (e.g., 234...): ${reset}`);
+            if (!phoneNumber) {
+                isOnboarding = false;
+                return;
+            }
+
+            const otpSent = await handleLoginRequest(phoneNumber);
+            if (!otpSent) {
+                isOnboarding = false;
+                return;
+            }
+
+            const otp = await askQuestion(`${bold}  Enter the 6-digit OTP Code: ${reset}`);
+            userId = await handleVerifyRequest(phoneNumber, otp);
+            
+            if (!userId) {
+                isOnboarding = false;
+                return runInteractiveOnboarding();
+            }
         }
 
-        const otpSent = await handleLoginRequest(phoneNumber);
-        if (!otpSent) {
-            isOnboarding = false;
-            return;
-        }
-
-        const otp = await askQuestion(`${bold}  Enter the 6-digit OTP Code: ${reset}`);
-        const userId = await handleVerifyRequest(phoneNumber, otp);
-        
-        if (!userId) {
-            isOnboarding = false;
-            return runInteractiveOnboarding();
-        }
-
-        log.step(2, "Link Child Device");
+        log.step(PARENT_NUMBER ? 1 : 2, "Link Child Device");
         const childNumber = await askQuestion(`${bold}  Enter Child Phone Number (or Enter for QR): ${reset}`);
         
         isOnboarding = false; // Re-enable logs before starting session
@@ -563,6 +692,18 @@ async function init() {
 
     try {
         await startNotifierBot();
+        
+        // Auto-reconnect existing child sessions
+        if (fs.existsSync(__dirname)) {
+            const files = fs.readdirSync(__dirname);
+            for (const file of files) {
+                if (file.startsWith('auth_info_child_')) {
+                    const userId = file.replace('auth_info_child_', '');
+                    log.info(`Auto-reconnecting child session: ${userId}`);
+                    startChildSession(userId, PARENT_JID);
+                }
+            }
+        }
         
         // Wait for bot to be online before starting onboarding
         const checkOnline = setInterval(() => {
