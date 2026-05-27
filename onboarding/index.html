@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GuardianLink Onboarding</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- Background elements for ambient glow -->
+    <div class="glow-bg">
+        <div class="glow-sphere glow-1"></div>
+        <div class="glow-sphere glow-2"></div>
+    </div>
+
+    <div class="onboarding-wrapper">
+        <!-- Logo and Header -->
+        <header class="main-header">
+            <div class="logo-container">
+                <svg class="logo-icon" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M12 22C12 22 20 18 20 12V5L12 2L4 5V12C4 18 12 22 12 22Z" stroke="url(#logo-grad)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                    <path d="M12 8V16" stroke="url(#logo-grad)" stroke-width="2.5" stroke-linecap="round"/>
+                    <path d="M9 12H15" stroke="url(#logo-grad)" stroke-width="2.5" stroke-linecap="round"/>
+                    <defs>
+                        <linearGradient id="logo-grad" x1="4" y1="2" x2="20" y2="22" gradientUnits="userSpaceOnUse">
+                            <stop stop-color="#818cf8" />
+                            <stop offset="1" stop-color="#c084fc" />
+                        </linearGradient>
+                    </defs>
+                </svg>
+                <span class="logo-text">Guardian<span>Link</span></span>
+            </div>
+            <p class="header-subtitle">Parent Device Authentication</p>
+        </header>
+
+        <!-- Main Onboarding Card -->
+        <div class="onboarding-card">
+            
+            <!-- Stepper Progress Tracker -->
+            <div class="stepper">
+                <div class="step-indicator active" data-target="1">
+                    <div class="step-number">1</div>
+                    <div class="step-label">Input</div>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-indicator" data-target="2">
+                    <div class="step-number">2</div>
+                    <div class="step-label">Authenticating</div>
+                </div>
+                <div class="step-connector"></div>
+                <div class="step-indicator" data-target="3">
+                    <div class="step-number">3</div>
+                    <div class="step-label">Authenticated</div>
+                </div>
+            </div>
+
+            <!-- Step Panels -->
+            <div class="panels-container">
+                
+                <!-- SCREEN 1: Input -->
+                <div class="step-panel active" id="step-pane-1">
+                    <div class="panel-header text-center">
+                        <h2>Enter WhatsApp Number</h2>
+                        <p>We need your parent WhatsApp number to securely link your dashboard.</p>
+                    </div>
+
+                    <div class="input-group" style="margin-top: 2rem;">
+                        <label for="parent-phone">Parent's WhatsApp Number</label>
+                        <div class="phone-input-wrapper">
+                            <div class="country-code">
+                                <span>🇳🇬</span>
+                                <span>+234</span>
+                            </div>
+                            <input type="tel" id="parent-phone" value="09034632271" placeholder="09034632271" autocomplete="off">
+                        </div>
+                    </div>
+
+                    <button type="button" class="btn btn-primary" id="btn-authenticate" style="margin-top: 1.5rem;">
+                        Authenticate Number
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"></line><polyline points="12 5 19 12 12 19"></polyline></svg>
+                    </button>
+                </div>
+
+                <!-- SCREEN 2: Authenticating -->
+                <div class="step-panel" id="step-pane-2">
+                    <div class="panel-header text-center">
+                        <h2>Authenticating...</h2>
+                        <p>Please wait while we verify your number.</p>
+                    </div>
+
+                    <div class="auth-spinner-container" style="display: flex; justify-content: center; margin: 3rem 0;">
+                        <div class="auth-spinner"></div>
+                    </div>
+                </div>
+
+                <!-- SCREEN 3: Authenticated -->
+                <div class="step-panel" id="step-pane-3">
+                    <div class="success-screen-wrapper">
+                        <!-- Animated Success Check -->
+                        <div class="success-animation-container">
+                            <div class="success-ring"></div>
+                            <svg class="success-checkmark" viewBox="0 0 52 52">
+                                <circle class="checkmark-circle" cx="26" cy="26" r="25" fill="none"/>
+                                <path class="checkmark-check" fill="none" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+                            </svg>
+                        </div>
+
+                        <div class="panel-header text-center">
+                            <h2>Number Authenticated!</h2>
+                            <p style="margin-top: 1rem; font-size: 1.05rem;">Your WhatsApp number <strong id="success-phone" style="color: var(--primary);"></strong> has been successfully verified.</p>
+                            <p style="margin-top: 0.75rem; font-size: 0.9rem; color: var(--text-muted);">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align: middle; margin-right: 4px; margin-top: -2px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path></svg>
+                                The GuardianLink bot will text you shortly to confirm.
+                            </p>
+                        </div>
+
+                        <button type="button" class="btn btn-primary btn-glow" id="btn-finish" style="margin-top: 2.5rem;">
+                            Continue to Dashboard
+                        </button>
+                    </div>
+                </div>
+
+            </div>
+
+        </div>
+
+        <!-- Quick navigation guide (only for showcase/screenshotting convenience) -->
+        <div class="demo-controller">
+            <span class="demo-label">Screenshot Navigation Tool:</span>
+            <div class="demo-buttons">
+                <button class="demo-btn active" data-step="1">1. Input</button>
+                <button class="demo-btn" data-step="2">2. Authenticating</button>
+                <button class="demo-btn" data-step="3">3. Authenticated</button>
+            </div>
+        </div>
+
+        <footer class="main-footer">
+            <p>&copy; 2026 GuardianLink Child Protection Systems. Built for child safety compliance.</p>
+        </footer>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>

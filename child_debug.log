@@ -1,0 +1,94 @@
+[2026-05-27T01:10:35.955Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="no space"
+[2026-05-27T01:10:36.990Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:10:37.015Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:10:37.320Z] type=append count=1
+  [0] fromMe=true remoteJid=2349034632271:62@s.whatsapp.net pushName=null type=append msgKeys=extendedTextMessage text="🛡️ GuardianLink Safety Monitoring is active on this device with parental consent."
+[2026-05-27T01:10:41.823Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:10:46.591Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="its loading sha"
+[2026-05-27T01:11:07.135Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:11:14.435Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="ok done"
+[2026-05-27T01:11:14.462Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="okay
+once yuo're done
+test it"
+[2026-05-27T01:11:14.553Z] type=notify count=1
+  [0] fromMe=false remoteJid=192603983237329@lid pushName=Jude№ type=notify msgKeys=stickerMessage,messageContextInfo text=""
+[2026-05-27T01:11:14.911Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:11:22.019Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="so this is the child?"
+[2026-05-27T01:11:29.371Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:11:30.161Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="you are athe child"
+[2026-05-27T01:11:31.563Z] type=notify count=1
+  [0] fromMe=false remoteJid=173044618252312@lid pushName=patrick emechebe type=notify msgKeys=conversation,messageContextInfo text="You dey mad"
+[2026-05-27T01:11:32.113Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:11:45.620Z] type=notify count=1
+  [0] fromMe=false remoteJid=173044618252312@lid pushName=patrick emechebe type=notify msgKeys=conversation,messageContextInfo text="If I slap you"
+[2026-05-27T01:11:49.246Z] type=notify count=1
+  [0] fromMe=false remoteJid=173044618252312@lid pushName=patrick emechebe type=notify msgKeys=conversation,messageContextInfo text="Pussy ass"
+[2026-05-27T01:11:50.369Z] type=append count=1
+  [0] fromMe=true remoteJid=173044618252312@lid pushName=null type=append msgKeys=extendedTextMessage text="⚠️ Please maintain respectful language."
+[2026-05-27T01:12:18.324Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="i've seen it"
+[2026-05-27T01:12:20.146Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=imageMessage text=""
+[2026-05-27T01:12:20.492Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="it worked"
+[2026-05-27T01:12:22.129Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="Oh sharp"
+[2026-05-27T01:12:31.166Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:13:02.248Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:13:16.893Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="chill let me confirm some things first"
+[2026-05-27T01:13:20.260Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="we cant block a msg from sending yeah"
+[2026-05-27T01:14:02.480Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="you can't"
+[2026-05-27T01:14:12.529Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="or block a contact"
+[2026-05-27T01:14:13.621Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="you get another email
+that your fx email just finished"
+[2026-05-27T01:14:21.673Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="you can block"
+[2026-05-27T01:14:28.803Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="can i use student email?"
+[2026-05-27T01:15:05.499Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:15:23.687Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="just chill let me look for gmails"
+[2026-05-27T01:16:20.688Z] type=notify count=1
+  [0] fromMe=true remoteJid=2347019260253-1606754694@g.us pushName=Pt type=notify msgKeys=senderKeyDistributionMessage,messageContextInfo,conversation text="is anyone awake?"
+[2026-05-27T01:16:28.173Z] type=notify count=1
+  [0] fromMe=true remoteJid=2347019260253-1606754694@g.us pushName=Pt type=notify msgKeys=senderKeyDistributionMessage,messageContextInfo,extendedTextMessage text="@all"
+[2026-05-27T01:16:34.980Z] type=notify count=1
+  [0] fromMe=false remoteJid=2349034632271@s.whatsapp.net pushName=undefined type=notify msgKeys=protocolMessage text=""
+[2026-05-27T01:16:37.289Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="Lemme ask the GC"
+[2026-05-27T01:17:25.552Z] type=notify count=1
+  [0] fromMe=true remoteJid=192603983237329@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="🤫"
+[2026-05-27T01:17:38.275Z] type=notify count=1
+  [0] fromMe=true remoteJid=192603983237329@lid pushName=Pt type=notify msgKeys=conversation text="MJ still the goat Sha"
+[2026-05-27T01:17:50.139Z] type=notify count=1
+  [0] fromMe=true remoteJid=192603983237329@lid pushName=Pt type=notify msgKeys=conversation text="But you have to give Drake he's credit too"
+[2026-05-27T01:19:14.353Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="did you find"
+[2026-05-27T01:19:27.237Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="i can create a new one"
+[2026-05-27T01:19:57.254Z] type=notify count=1
+  [0] fromMe=false remoteJid=279344857514144@lid pushName=Paul type=notify msgKeys=extendedTextMessage,messageContextInfo text="yeah
+one of my emails i just found out was still working"
+[2026-05-27T01:20:36.674Z] type=notify count=1
+  [0] fromMe=true remoteJid=279344857514144@lid pushName=Pt type=notify msgKeys=extendedTextMessage text="i think patrick.emechebe is working cause i used it here just now to run the stuff"

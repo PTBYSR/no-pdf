@@ -62,7 +62,11 @@ Your task: Analyze the message below and return "UNSAFE" if it contains:
 If the message contains ANY indication of the above (in English, Pidgin, or mixed), return "UNSAFE".
 If the message is clearly safe, casual, or unrelated, return "SAFE".
 
-If UNSAFE, respond with "UNSAFE:" followed by a very brief (1-3 words) reason. For example: "UNSAFE: Grooming attempt" or "UNSAFE: Bullying/Threat".
+If UNSAFE, classify the severity as LOW, MEDIUM, or HIGH. Respond with "UNSAFE:[SEVERITY]:" followed by a very brief (1-3 words) reason. 
+For example: "UNSAFE:HIGH:Grooming attempt" or "UNSAFE:LOW:Mild profanity".
+- LOW: Mild bad words, minor rudeness.
+- MEDIUM: Bullying, harassment, emotional manipulation.
+- HIGH: Grooming, sexual content, severe threats, sextortion.
 If SAFE, respond ONLY with "SAFE".`;
 
 const SUMMARY_SYSTEM_PROMPT = `You are a helpful safety assistant for Nigerian parents. You understand Nigerian Pidgin English, Nigerian English, and local slangs fluently.
@@ -92,8 +96,20 @@ async function analyzeMessage(messageText) {
 
         if (result.toUpperCase().startsWith("UNSAFE")) {
             const reasonParts = result.split(":");
-            const reason = reasonParts.length > 1 ? reasonParts.slice(1).join(":").trim() : "Suspicious content detected";
-            return { isUnsafe: true, reason: reason };
+            let severity = "MEDIUM"; // Default
+            let reason = "Suspicious content detected";
+            
+            if (reasonParts.length > 2) {
+                severity = reasonParts[1].trim().toUpperCase();
+                reason = reasonParts.slice(2).join(":").trim();
+            } else if (reasonParts.length > 1) {
+                reason = reasonParts.slice(1).join(":").trim();
+            }
+            
+            // Normalize severity
+            if (!["LOW", "MEDIUM", "HIGH"].includes(severity)) severity = "MEDIUM";
+
+            return { isUnsafe: true, severity, reason };
         }
 
         return { isUnsafe: false };

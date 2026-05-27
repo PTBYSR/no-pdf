@@ -16,15 +16,19 @@ const { analyzeMessage, summarizeActivity } = require('./detection_agent');
 // --------------------------------------------------------------------------------
 // Suppress noisy Baileys session dumps
 // --------------------------------------------------------------------------------
-const _origConsoleLog = console.log;
-console.log = (...args) => {
-    for (const a of args) {
-        if (typeof a === 'string' && (a.includes('Closing session') || a.includes('SessionEntry'))) return;
-        if (a && typeof a === 'object' && a.constructor && a.constructor.name === 'SessionEntry') return;
-        if (a && typeof a === 'object' && a._chains && a.currentRatchet) return; // duck-type SessionEntry
-    }
-    _origConsoleLog.apply(console, args);
+const suppressLogs = (origFunc) => {
+    return (...args) => {
+        for (const a of args) {
+            if (typeof a === 'string' && (a.includes('Closing session') || a.includes('SessionEntry') || a.includes('closed: -1'))) return;
+            if (a && typeof a === 'object' && (a.constructor?.name === 'SessionEntry' || a.currentRatchet || a._chains)) return;
+        }
+        origFunc.apply(console, args);
+    };
 };
+console.log = suppressLogs(console.log);
+console.warn = suppressLogs(console.warn);
+console.info = suppressLogs(console.info);
+console.error = suppressLogs(console.error);
 
 // --------------------------------------------------------------------------------
 // Minimal Logger Setup
@@ -79,7 +83,7 @@ function updateStatus(botStatus, childStatus) {
 // --------------------------------------------------------------------------------
 // Configuration
 // --------------------------------------------------------------------------------
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const MONGODB_URI = process.env.MONGODB_URI;
 const PARENT_NUMBER = process.env.PARENT_NUMBER?.replace(/[^0-9]/g, '');
 const BOT_NUMBER = process.env.BOT_NUMBER?.replace(/[^0-9]/g, '');
@@ -281,26 +285,16 @@ async function startNotifierBot() {
                     await sock.sendMessage(senderJid, { text: `⚠️ Child device is not currently connected. Cannot block.` });
                 }
             } else if (text.toLowerCase().startsWith('/status')) {
-                const parentPhone = senderJid.split('@')[0];
-                const userId = `${parentPhone}_child`;
-                const childSock = activeChildSessions.get(userId);
-
                 let statusMsg = `📊 *Status Report*\n\n`;
-                if (childSock) {
-                    statusMsg += `🟢 *Connection:* Online & Monitoring\n`;
-                    if (db) {
-                        try {
-                            const lastMsg = await db.collection('message_logs')
-                                .findOne({ userId }, { sort: { timestamp: -1 } });
-                            if (lastMsg) {
-                                statusMsg += `🕒 *Last Active:* ${lastMsg.timestamp.toLocaleString()}\n`;
-                            } else {
-                                statusMsg += `🕒 *Last Active:* No messages logged yet\n`;
-                            }
-                        } catch (e) {
-                            statusMsg += `🕒 *Last Active:* Unknown\n`;
-                        }
+                
+                if (activeChildSessions.size > 0) {
+                    for (const [userId, childSock] of activeChildSessions.entries()) {
+                        const childPhone = childSock.user?.id ? childSock.user.id.split(':')[0].split('@')[0] : 'Unknown';
+                        statusMsg += `🟢 *Connection:* Online & Monitoring\n`;
+                        statusMsg += `📱 *Linked Number:* +${childPhone}\n`;
+                        statusMsg += `🆔 *Session:* ${userId}\n`;
                     }
+                    statusMsg += `\n📊 *Alerts logged:* ${memoryStore.alerts.length}`;
                 } else {
                     statusMsg += `🔴 *Connection:* Disconnected (or not linked)\n`;
                 }
@@ -414,8 +408,9 @@ async function startChildSession(userId, parentJid, childNumber) {
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect.error)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) startChildSession(userId, parentJid, childNumber);
-            else {
+            if (shouldReconnect) {
+                setTimeout(() => startChildSession(userId, parentJid, childNumber), 3000);
+            } else {
                 activeChildSessions.delete(userId);
                 updateStatus('Online', 'Disconnected');
             }
@@ -435,6 +430,9 @@ async function startChildSession(userId, parentJid, childNumber) {
             if (notifierSock && parentJid) {
                 notifierSock.sendMessage(parentJid, { text: '✅ Child Device Connected Successfully!\nMonitoring is now active.' }).catch(() => {});
             }
+            
+            // Misuse Prevention (Transparency)
+            sock.sendMessage(sock.user.id, { text: '🛡️ GuardianLink Safety Monitoring is active on this device with parental consent.' }).catch(() => {});
         }
     });
 
@@ -448,21 +446,36 @@ async function startChildSession(userId, parentJid, childNumber) {
 
             if (text) {
                 log.info(`[MSG] ${sender}: "${text}"`);
-                if (db) {
-                    db.collection('message_logs').insertOne({
-                        userId, senderJid: msg.key.remoteJid, senderName: sender,
-                        content: text, timestamp: new Date()
-                    }).catch(() => {});
-                }
 
-                if (text.length > 5) {
+                if (text.length > 1) {
                     const analysis = await analyzeMessage(text);
                     if (analysis.isUnsafe) {
-                        log.alert(`${sender}: "${text}" - Reason: ${analysis.reason}`);
-                        if (notifierSock && parentJid) {
-                            const senderPhone = msg.key.remoteJid.split('@')[0];
-                            const alertMsg = `🚨 *SAFETY ALERT*\nSuspicious message detected!\n\n*From:* ${sender} (${senderPhone})\n*Reason:* ${analysis.reason}\n\n*Message:*\n"${text}"\n\n_Reply with "/block ${senderPhone}" to block this contact on your child's phone._`;
-                            notifierSock.sendMessage(parentJid, { text: alertMsg }).catch(() => {});
+                        const logEntry = {
+                            userId, senderJid: msg.key.remoteJid, senderName: sender,
+                            content: text, severity: analysis.severity, reason: analysis.reason, timestamp: new Date()
+                        };
+                        
+                        if (db) {
+                            db.collection('message_logs').insertOne(logEntry).catch(() => {});
+                        } else {
+                            memoryStore.alerts.unshift(logEntry);
+                            if (memoryStore.alerts.length > 200) memoryStore.alerts.pop();
+                        }
+
+                        log.alert(`${sender}: "${text}" - [${analysis.severity}] Reason: ${analysis.reason}`);
+                        
+                        if (analysis.severity === 'LOW') {
+                            sock.sendMessage(msg.key.remoteJid, { text: "⚠️ Please maintain respectful language." }).catch(() => {});
+                        } else {
+                            if (notifierSock && PARENT_JID) {
+                                const senderPhone = msg.key.remoteJid.split('@')[0];
+                                const alertMsg = `🚨 *SAFETY ALERT [${analysis.severity}]*\nSuspicious message detected!\n\n*From:* ${sender} (${senderPhone})\n*Reason:* ${analysis.reason}\n\n*Message:*\n"${text}"\n\n_Reply with "/block ${senderPhone}" to block this contact on your child's phone._`;
+                                notifierSock.sendMessage(PARENT_JID, { text: alertMsg }).catch(() => {});
+                            }
+                        }
+
+                        if (analysis.severity === 'HIGH') {
+                            sock.updateBlockStatus(msg.key.remoteJid, 'block').catch(err => log.error(`Auto-block failed: ${err.message}`));
                         }
                     }
                 }
@@ -473,7 +486,8 @@ async function startChildSession(userId, parentJid, childNumber) {
 
 // In-Memory Fallback Store
 const memoryStore = {
-    users: new Map()
+    users: new Map(),
+    alerts: []
 };
 
 async function upsertUserOTP(phoneNumber, otp, otpExpires) {
@@ -570,6 +584,119 @@ app.post('/api/monitor/start', async (req, res) => {
     res.json({ success: true, message: 'Session initialization started' });
 });
 
+app.get('/api/alerts', async (req, res) => {
+    const { userId } = req.query;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    
+    if (!db) {
+        const alerts = memoryStore.alerts.filter(a => a.userId === userId).slice(0, 50);
+        return res.json({ success: true, alerts });
+    }
+    
+    try {
+        const alerts = await db.collection('message_logs')
+            .find({ userId })
+            .sort({ timestamp: -1 })
+            .limit(50)
+            .toArray();
+        res.json({ success: true, alerts });
+    } catch (e) {
+        res.status(500).json({ error: 'Failed to fetch alerts' });
+    }
+});
+
+app.post('/api/reset', async (req, res) => {
+    const { userId } = req.body;
+    if (!userId) return res.status(400).json({ error: 'userId required' });
+    
+    const childSock = activeChildSessions.get(userId);
+    try {
+        if (childSock) {
+            await childSock.logout();
+            activeChildSessions.delete(userId);
+        } else {
+            const authFolder = `auth_info_child_${userId}`;
+            if (fs.existsSync(authFolder)) {
+                fs.rmSync(authFolder, { recursive: true, force: true });
+            }
+        }
+        res.json({ success: true, message: 'Child device disconnected and data cleared' });
+    } catch (e) {
+        res.status(500).json({ error: e.message });
+    }
+});
+
+app.get('/api/status', async (req, res) => {
+    const childSessions = [];
+    for (const [userId, sock] of activeChildSessions.entries()) {
+        const childPhone = sock.user?.id ? sock.user.id.split(':')[0].split('@')[0] : 'Unknown';
+        childSessions.push({ userId, childPhone, connected: true });
+    }
+
+    res.json({
+        botOnline: !!notifierSock,
+        parentNumber: PARENT_NUMBER || null,
+        childSessions,
+        alertCount: memoryStore.alerts.length
+    });
+});
+
+app.post('/api/parent-number', (req, res) => {
+    const { phoneNumber } = req.body;
+    if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' });
+    
+    const cleaned = phoneNumber.replace(/[^0-9]/g, '');
+    PARENT_JID = `${cleaned}@s.whatsapp.net`;
+    PARENT_LID = null;
+    
+    // Save to .env so it persists across reboots
+    try {
+        let envContent = fs.existsSync('.env') ? fs.readFileSync('.env', 'utf-8') : '';
+        if (envContent.includes('PARENT_NUMBER=')) {
+            envContent = envContent.replace(/PARENT_NUMBER=.*/g, `PARENT_NUMBER=${cleaned}`);
+        } else {
+            envContent += `\nPARENT_NUMBER=${cleaned}`;
+        }
+        fs.writeFileSync('.env', envContent.trim() + '\n');
+    } catch (err) {
+        log.error(`Failed to save PARENT_NUMBER to .env: ${err.message}`);
+    }
+
+    log.success(`Parent number updated to: ${cleaned}`);
+    res.json({ success: true, parentNumber: cleaned });
+});
+
+app.post('/api/reconnect', async (req, res) => {
+    const { childNumber } = req.body;
+    if (!childNumber) return res.status(400).json({ error: 'childNumber required' });
+    
+    const cleaned = childNumber.replace(/[^0-9]/g, '');
+    const userId = `${PARENT_NUMBER || cleaned}_child`;
+    
+    if (activeChildSessions.has(userId)) {
+        return res.status(400).json({ error: 'Child session already active' });
+    }
+    
+    startChildSession(userId, PARENT_JID, cleaned).catch(err => log.error(err.message));
+    res.json({ success: true, message: `Reconnecting child session: ${userId}` });
+});
+
+app.post('/api/action/block', async (req, res) => {
+    const { userId, targetJid } = req.body;
+    if (!userId || !targetJid) return res.status(400).json({ error: 'userId and targetJid required' });
+    
+    const childSock = activeChildSessions.get(userId);
+    if (!childSock) return res.status(404).json({ error: 'Child session not active' });
+    
+    try {
+        await childSock.updateBlockStatus(targetJid, 'block');
+        log.success(`[API] Blocked contact ${targetJid} on child session ${userId}`);
+        res.json({ success: true, message: 'Contact blocked successfully' });
+    } catch (e) {
+        log.error(`[API] Failed to block contact: ${e.message}`);
+        res.status(500).json({ error: 'Failed to block contact' });
+    }
+});
 app.post('/api/test-alert', async (req, res) => {
     const { phoneNumber } = req.body;
     if (!phoneNumber) return res.status(400).json({ error: 'phoneNumber required' });
@@ -693,7 +820,8 @@ async function init() {
     try {
         await startNotifierBot();
         
-        // Auto-reconnect existing child sessions
+        // Count auto-reconnected sessions
+        let autoReconnected = 0;
         if (fs.existsSync(__dirname)) {
             const files = fs.readdirSync(__dirname);
             for (const file of files) {
@@ -701,17 +829,22 @@ async function init() {
                     const userId = file.replace('auth_info_child_', '');
                     log.info(`Auto-reconnecting child session: ${userId}`);
                     startChildSession(userId, PARENT_JID);
+                    autoReconnected++;
                 }
             }
         }
         
-        // Wait for bot to be online before starting onboarding
-        const checkOnline = setInterval(() => {
-            if (notifierSock) {
-                clearInterval(checkOnline);
-                runInteractiveOnboarding();
-            }
-        }, 1000);
+        // Only show onboarding prompt if no child is already linked
+        if (autoReconnected === 0) {
+            const checkOnline = setInterval(() => {
+                if (notifierSock) {
+                    clearInterval(checkOnline);
+                    runInteractiveOnboarding();
+                }
+            }, 1000);
+        } else {
+            log.success(`${autoReconnected} child session(s) auto-reconnected. Skipping terminal setup.`);
+        }
 
     } catch (err) {
         log.error(`Critical Error: ${err.message}`);
